@@ -1,5 +1,5 @@
 export type CueStatus = 'pending' | 'confirmed' | 'followup'
-export type TabId = 'live' | 'backstage' | 'terms' | 'offline'
+export type TabId = 'live' | 'backstage' | 'terms' | 'offline' | 'archive'
 
 export interface Speaker {
   id: string
@@ -38,6 +38,7 @@ export interface Announcement {
 
 export interface Cue {
   id: string
+  sessionId: string
   speakerId: string
   text: string
   receivedAt: number
@@ -48,6 +49,26 @@ export interface Cue {
   duplicateOf: string | null
   followupText: string
   tags: string[]
+  carriedFromSessionId: string | null
+  carriedIntoSessionId: string | null
+}
+
+export interface SessionSummary {
+  received: number
+  confirmed: number
+  avgDelaySeconds: number
+  duplicates: number
+  offlinePending: number
+}
+
+export interface SessionArchive {
+  id: string
+  sessionId: string
+  sessionTitle: string
+  sessionTime: string
+  closedAt: number
+  cues: Cue[]
+  summary: SessionSummary
 }
 
 export interface Reminder {
@@ -65,6 +86,7 @@ export interface DeskState {
   terms: Term[]
   announcements: Announcement[]
   cues: Cue[]
+  archives: SessionArchive[]
   reminders: Reminder[]
   activeCueId: string
   fontScale: number
