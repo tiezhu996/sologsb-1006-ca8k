@@ -2,9 +2,9 @@
   import { onMount } from 'svelte'
   import Button from 'flowbite-svelte/Button.svelte'
   import {
-    acknowledgeReminder, addAnnouncement, addSession, addSpeaker, addTerm, canRedo, canUndo, clearDuplicate,
-    deleteCue, desk, getDelay, ingestCue, moveCue, publishAnnouncement, redoDesk, sendReminder, setActiveCue,
-    setCueStatus, setFontScale, setLiveSimulation, setOnline, speakerName, termTarget, undoDesk, updateCue,
+    acknowledgeReminder, addAnnouncement, addSession, addSpeaker, addTerm, canRedo, canUndo, carryOverCue, clearDuplicate,
+    deleteCue, desk, getDelay, ingestCue, moveCue, publishAnnouncement, redoDesk, sendReminder, sessionTitle, setActiveCue,
+    setCueStatus, setFontScale, setLiveSimulation, setOnline, speakerName, switchSession, termTarget, undoDesk, updateCue,
     updateSession, updateSpeaker, updateTerm
   } from '$lib/store'
   import type { Announcement, Cue, Session, TabId, Term } from '$lib/types'
@@ -39,6 +39,7 @@
   $: activeSpeaker = $desk.speakers.find(item => item.id === activeCue?.speakerId)
   $: activeTerms = $desk.terms.filter(item => item.speakerId === activeCue?.speakerId || activeCue?.tags.includes(item.target))
   $: unreadReminders = $desk.reminders.filter(item => !item.acknowledged)
+  $: carryableCount = $desk.archives.reduce((count, archive) => count + archive.cues.filter(item => item.status === 'followup' && !item.carriedAt).length, 0)
 
   onMount(() => {
     if (typeof navigator !== 'undefined') setOnline(navigator.onLine)
@@ -105,6 +106,15 @@
     announcementText = ''
     flash('紧急通知已保存到后台。')
   }
+  function changeSessionStatus(session: Session, status: Session['status']) {
+    if (status !== 'live') { updateSession(session.id, { status }); return }
+    const { archived } = switchSession(session.id)
+    flash(archived ? `已换场到「${session.title}」：上一场 ${archived} 条内容已封存并生成小结。` : `已换场到「${session.title}」。`)
+  }
+  function carryOver(archiveId: string, cueId: string) {
+    carryOverCue(archiveId, cueId)
+    flash('待跟进条目已顺延到本场队列，并保留原场次标记。')
+  }
   function formatTime(timestamp: number) {
     return new Date(timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
   }
@@ -146,11 +156,12 @@
         <div><strong class="block tracking-tight">会议同传提示台</strong><span class="block text-[10px] uppercase tracking-[.16em] text-slate-400">Live Interpreter Cue Desk</span></div>
       </div>
       <nav class="order-3 flex w-full gap-1 overflow-x-auto rounded-xl bg-slate-800/80 p-1 lg:order-none lg:w-auto" aria-label="工作区">
-        {#each [['live','现场传译'],['backstage','后台准备'],['terms','术语与通知'],['offline','离线暂存']] as item}
+        {#each [['live','现场传译'],['backstage','后台准备'],['terms','术语与通知'],['offline','离线暂存'],['archive','场次档案']] as item}
           <button class="focus-ring whitespace-nowrap rounded-lg px-4 py-2 text-xs font-bold transition {tab === item[0] ? 'bg-white text-ink shadow' : 'text-slate-300 hover:bg-slate-700'}" aria-current={tab === item[0] ? 'page' : undefined} on:click={() => tab = item[0] as TabId}>
             {item[1]}
             {#if item[0] === 'live' && pendingCount}<span class="ml-2 rounded-full bg-orange-500 px-1.5 py-0.5 text-[10px] text-white">{pendingCount}</span>{/if}
             {#if item[0] === 'offline' && offlineCount}<span class="ml-2 rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] text-white">{offlineCount}</span>{/if}
+            {#if item[0] === 'archive' && carryableCount}<span class="ml-2 rounded-full bg-violet-500 px-1.5 py-0.5 text-[10px] text-white">{carryableCount}</span>{/if}
           </button>
         {/each}
       </nav>
@@ -210,7 +221,7 @@
 
           <section class="rounded-2xl border bg-white shadow-sm">
             <div class="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
-              <div><span class="text-[10px] font-black uppercase tracking-[.16em] text-slate-400">后台传译队列</span><h2 class="mt-1 font-bold">待确认与遗漏补充</h2></div>
+              <div><span class="text-[10px] font-black uppercase tracking-[.16em] text-slate-400">后台传译队列 · 仅本场内容</span><h2 class="mt-1 font-bold">待确认与遗漏补充</h2></div>
               <div class="flex items-center gap-3 text-xs text-slate-500"><span>自动接入</span><button type="button" role="switch" aria-label="自动接入现场文字" aria-checked={$desk.liveSimulation} class="focus-ring h-6 w-11 rounded-full p-1 transition {$desk.liveSimulation ? 'bg-teal-600' : 'bg-slate-300'}" on:click={() => setLiveSimulation(!$desk.liveSimulation)}><span class="block h-4 w-4 rounded-full bg-white transition {$desk.liveSimulation ? 'translate-x-5' : ''}"></span></button></div>
             </div>
             <div class="max-h-[600px] space-y-2 overflow-y-auto p-3 scrollbar-thin">
@@ -226,6 +237,7 @@
                         <span class="rounded-md px-2 py-1 {cue.status === 'confirmed' ? 'bg-emerald-100 text-emerald-800' : cue.status === 'followup' ? 'bg-amber-100 text-amber-900' : 'bg-blue-100 text-blue-800'}">{statusLabel(cue.status)}</span>
                         {#if cue.offline}<span class="rounded-md bg-amber-100 px-2 py-1 text-amber-900">离线暂存</span>{/if}
                         {#if cue.manual}<span class="rounded-md bg-slate-100 px-2 py-1 text-slate-600">手工</span>{/if}
+                        {#if cue.originSessionId}<span class="rounded-md bg-violet-100 px-2 py-1 text-violet-800">顺延自「{sessionTitle($desk, cue.originSessionId)}」</span>{/if}
                       </div>
                       <p class="text-sm leading-6 lg:text-base">{cue.text}</p>
                       {#if cue.duplicateOf}
@@ -291,14 +303,14 @@
       <div class="mb-5"><p class="text-[10px] font-black uppercase tracking-[.18em] text-teal-700">后台准备内容 · 不会直接显示给现场</p><h1 class="mt-1 text-3xl font-black">议程、发言人与紧急通知</h1></div>
       <div class="grid gap-4 xl:grid-cols-[1.3fr_.7fr]">
         <section class="rounded-2xl border bg-white p-4 shadow-sm">
-          <div class="mb-4 flex items-center justify-between"><div><h2 class="font-black">演讲顺序</h2><p class="text-xs text-slate-500">拖动时间、状态或发言人即可更新后台准备内容。</p></div><Button size="sm" on:click={addSession}>新增场次</Button></div>
+          <div class="mb-4 flex items-center justify-between"><div><h2 class="font-black">演讲顺序</h2><p class="text-xs text-slate-500">把某场设为“进行中”即换场：上一场未确认内容自动封存并生成小结，离线暂存不受影响。</p></div><Button size="sm" on:click={addSession}>新增场次</Button></div>
           <div class="space-y-3">
             {#each $desk.sessions.sort((a,b) => a.order - b.order) as session}
               <article class="grid gap-3 rounded-xl border p-3 md:grid-cols-[80px_1fr_190px_120px]">
                 <input class="focus-ring rounded-lg border px-2 py-2 text-sm font-bold" type="time" value={session.time} on:change={event => updateSession(session.id, { time: (event.target as HTMLInputElement).value })} />
                 <div><input class="focus-ring w-full rounded-lg border px-3 py-2 font-bold" value={session.title} on:change={event => updateSession(session.id, { title: (event.target as HTMLInputElement).value })} /><span class="mt-1 block text-[10px] text-slate-500">{session.room}</span></div>
                 <select class="focus-ring rounded-lg border px-2" value={session.speakerId} on:change={event => updateSession(session.id, { speakerId: (event.target as HTMLSelectElement).value })}>{#each $desk.speakers as speaker}<option value={speaker.id}>{speaker.name}</option>{/each}</select>
-                <select class="focus-ring rounded-lg border px-2" value={session.status} on:change={event => updateSession(session.id, { status: (event.target as HTMLSelectElement).value as Session['status'] })}><option value="upcoming">未开始</option><option value="live">进行中</option><option value="done">已结束</option></select>
+                <select class="focus-ring rounded-lg border px-2" value={session.status} on:change={event => changeSessionStatus(session, (event.target as HTMLSelectElement).value as Session['status'])}><option value="upcoming">未开始</option><option value="live">进行中</option><option value="done">已结束</option></select>
               </article>
             {/each}
           </div>
@@ -356,7 +368,7 @@
           <label class="text-xs font-bold">发言人或场次<select class="focus-ring mt-2 w-full rounded-xl border p-3" bind:value={manualSpeakerId}><option value="">跟随当前发言人</option>{#each $desk.speakers as speaker}<option value={speaker.id}>{speaker.name}</option>{/each}</select></label>
           <label class="mt-4 block text-xs font-bold">现场文字<textarea bind:this={manualInput} class="focus-ring mt-2 w-full rounded-xl border p-4 text-base leading-7" rows="8" bind:value={manualText} placeholder="网络中断时，在这里继续录入…" on:keydown={event => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') submitManual() }}></textarea></label>
           <Button class="mt-3 w-full" size="lg" disabled={!manualText.trim()} on:click={submitManual}>加入队列</Button>
-          <div class="mt-4 rounded-xl bg-amber-50 p-3 text-xs text-amber-900"><strong>暂存规则：</strong>离线条目会带“本地”标记；恢复连接后自动与本机队列合并，并执行相似内容检测。</div>
+          <div class="mt-4 rounded-xl bg-amber-50 p-3 text-xs text-amber-900"><strong>暂存规则：</strong>离线条目会带“本地”标记；恢复连接后自动与本机队列合并，并执行相似内容检测。换场不会清除暂存内容，条目继续留在本机等待合并。</div>
         </section>
         <section class="rounded-2xl border bg-white p-5 shadow-sm">
           <div class="mb-4 flex flex-wrap items-center justify-between gap-3"><div><h2 class="font-black">合并与冲突检查</h2><p class="text-xs text-slate-500">当前有 {offlineCount} 条离线条目，{duplicateCount} 条疑似重复。</p></div><Button disabled={$desk.online || !offlineCount} color="green" on:click={mergeOffline}>恢复连接并合并</Button></div>
@@ -371,6 +383,57 @@
             {#if !offlineCount}<div class="grid min-h-60 place-items-center rounded-xl bg-slate-50 text-center"><div><div class="mx-auto grid h-14 w-14 place-items-center rounded-full bg-emerald-100 text-2xl text-emerald-700">✓</div><strong class="mt-3 block text-sm">没有离线暂存条目</strong><p class="mt-1 text-xs text-slate-500">可断开网络后测试手工录入与恢复合并。</p></div></div>{/if}
           </div>
         </section>
+      </div>
+    {/if}
+    {#if tab === 'archive'}
+      <div class="mb-5">
+        <p class="text-[10px] font-black uppercase tracking-[.18em] text-violet-700">换场封存 · 按场次回看</p>
+        <h1 class="mt-1 text-3xl font-black">场次档案与小结</h1>
+        <p class="mt-2 text-sm text-slate-500">换场时上一场的内容归到该场名下封存，现场队列只留本场；待跟进条目可顺延到本场，并保留原场次标记。</p>
+      </div>
+      <div class="space-y-4">
+        {#each $desk.archives as archive}
+          <section class="overflow-hidden rounded-2xl border bg-white shadow-sm">
+            <header class="flex flex-wrap items-center justify-between gap-3 border-b bg-slate-50 px-4 py-3">
+              <div>
+                <div class="flex flex-wrap items-center gap-2"><h2 class="font-black">{archive.title}</h2><span class="rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-bold text-slate-600">已封存</span></div>
+                <p class="mt-1 text-xs text-slate-500">{archive.time} · {archive.room} · {speakerName($desk, archive.speakerId)} · 封存于 {formatTime(archive.sealedAt)}</p>
+              </div>
+              <div class="grid grid-cols-4 gap-2 text-center">
+                <div class="rounded-xl border bg-white px-3 py-2"><strong class="block text-lg">{archive.summary.received}</strong><span class="text-[10px] text-slate-500">收到</span></div>
+                <div class="rounded-xl border bg-white px-3 py-2"><strong class="block text-lg text-emerald-700">{archive.summary.confirmed}</strong><span class="text-[10px] text-slate-500">确认</span></div>
+                <div class="rounded-xl border bg-white px-3 py-2"><strong class="block text-lg text-amber-700">{archive.summary.avgDelay}s</strong><span class="text-[10px] text-slate-500">平均延迟</span></div>
+                <div class="rounded-xl border bg-white px-3 py-2"><strong class="block text-lg text-red-700">{archive.summary.duplicates}</strong><span class="text-[10px] text-slate-500">重复</span></div>
+              </div>
+            </header>
+            <div class="space-y-2 p-3">
+              {#each archive.cues as cue}
+                <article class="rounded-xl border p-3 {cue.status === 'followup' ? 'border-amber-200 bg-amber-50/50' : 'border-slate-200 bg-white'}">
+                  <div class="mb-2 flex flex-wrap items-center gap-2 text-[10px] font-bold">
+                    <span class="rounded-md bg-slate-100 px-2 py-1 text-slate-600">{speakerName($desk, cue.speakerId)}</span>
+                    <span class="rounded-md border px-2 py-1 {delayClass(cue.delaySeconds)}">{formatTime(cue.receivedAt)} · 延迟 {cue.delaySeconds}s</span>
+                    <span class="rounded-md px-2 py-1 {cue.status === 'confirmed' ? 'bg-emerald-100 text-emerald-800' : cue.status === 'followup' ? 'bg-amber-100 text-amber-900' : 'bg-blue-100 text-blue-800'}">{statusLabel(cue.status)}</span>
+                    {#if cue.duplicateOf}<span class="rounded-md bg-red-100 px-2 py-1 text-red-800">疑似重复</span>{/if}
+                    {#if cue.carriedAt}<span class="rounded-md bg-violet-100 px-2 py-1 text-violet-800">已顺延</span>{/if}
+                  </div>
+                  <p class="text-sm leading-6">{cue.text}</p>
+                  {#if cue.followupText}<p class="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900"><strong>补译：</strong>{cue.followupText}</p>{/if}
+                  {#if cue.status === 'followup' && !cue.carriedAt}
+                    <div class="mt-2 flex justify-end"><button class="focus-ring rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-bold text-white transition hover:bg-violet-700 disabled:opacity-40" disabled={!$desk.sessions.some(item => item.status === 'live')} on:click={() => carryOver(archive.id, cue.id)}>顺延到本场</button></div>
+                  {/if}
+                </article>
+              {/each}
+            </div>
+          </section>
+        {:else}
+          <div class="grid min-h-60 place-items-center rounded-2xl border bg-white text-center shadow-sm">
+            <div>
+              <div class="mx-auto grid h-14 w-14 place-items-center rounded-full bg-violet-100 text-2xl text-violet-700">档</div>
+              <strong class="mt-3 block text-sm">还没有封存的场次</strong>
+              <p class="mt-1 text-xs text-slate-500">在「后台准备」把下一场设为“进行中”，上一场的内容会自动封存到这里并生成小结。</p>
+            </div>
+          </div>
+        {/each}
       </div>
     {/if}
   </main>
